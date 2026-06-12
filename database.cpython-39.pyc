@@ -1,0 +1,203 @@
+"""
+models.py — NILM Model Definitions & Inference
+KASIT Graduation Project | Dr. Ruba Obiedat
+"""
+
+import torch
+import torch.nn as nn
+import numpy as np
+
+
+class KettleCNN(nn.Module):
+    """Pure CNN Seq2Point — kettle_v8_w99.pt, window=99"""
+    def __init__(self, dropout=0.3):
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv1d(1,   32, kernel_size=7, padding=3), nn.BatchNorm1d(32),  nn.ReLU(),
+            nn.Conv1d(32,  64, kernel_size=5, padding=2), nn.BatchNorm1d(64),  nn.ReLU(),
+            nn.Conv1d(64, 128, kernel_size=3, padding=1), nn.BatchNorm1d(128), nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Conv1d(128, 128, kernel_size=3, padding=1), nn.BatchNorm1d(128), nn.ReLU(),
+        )
+        self.head = nn.Sequential(
+            nn.Linear(128, 64), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(64, 32),  nn.ReLU(),
+            nn.Linear(32, 1),
+        )
+    def forward(self, x):
+        feat = self.cnn(x)
+        mid  = feat[:, :, feat.size(2) // 2]
+        return self.head(mid).squeeze(1)
+
+
+class FridgeCNNBiLSTM(nn.Module):
+    """CNN-BiLSTM — fridge_v4_best.pt, window=99, lstm_hidden=64"""
+    def __init__(self, lstm_hidden=64, lstm_layers=2, dropout=0.3):
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv1d(1,  32, kernel_size=7, padding=3), nn.BatchNorm1d(32), nn.ReLU(),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2), nn.BatchNorm1d(64), nn.ReLU(),
+            nn.Conv1d(64, 64, kernel_size=3, padding=1), nn.BatchNorm1d(64), nn.ReLU(),
+            nn.Dropout(dropout),
+        )
+        self.lstm = nn.LSTM(input_size=64, hidden_size=lstm_hidden, num_layers=lstm_layers,
+                            batch_first=True, bidirectional=True, dropout=dropout)
+        self.head = nn.Sequential(
+            nn.Linear(lstm_hidden*2, 64), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 1),
+        )
+    def forward(self, x):
+        feat = self.cnn(x).permute(0,2,1)
+        out, _ = self.lstm(feat)
+        return self.head(out[:, out.size(1)//2, :]).squeeze(1)
+
+
+class WashingMachineCNNBiLSTM(nn.Module):
+    """CNN-BiLSTM — washing_machine_new_best.pt, window=599, lstm 1 layer"""
+    def __init__(self):
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv1d(1,  30, kernel_size=10, padding=4), nn.BatchNorm1d(30), nn.ReLU(), nn.Dropout(0.3),
+            nn.Conv1d(30, 30, kernel_size=8,  padding=3), nn.BatchNorm1d(30), nn.ReLU(), nn.Dropout(0.3),
+            nn.Conv1d(30, 40, kernel_size=6,  padding=2), nn.BatchNorm1d(40), nn.ReLU(), nn.Dropout(0.3),
+            nn.Conv1d(40, 50, kernel_size=5,  padding=2), nn.BatchNorm1d(50), nn.ReLU(), nn.Dropout(0.3),
+            nn.Conv1d(50, 50, kernel_size=5,  padding=2), nn.BatchNorm1d(50), nn.ReLU(),
+        )
+        self.lstm = nn.LSTM(50, 128, num_layers=1, batch_first=True, bidirectional=True)
+        self.fc   = nn.Sequential(nn.Linear(256,128), nn.ReLU(), nn.Dropout(0.3), nn.Linear(128,1))
+    def forward(self, x):
+        feat = self.cnn(x).permute(0,2,1)
+        out, _ = self.lstm(feat)
+        return self.fc(out[:, out.shape[1]//2, :]).squeeze(1)
+
+
+class DishwasherMultiScaleCNNBiLSTM(nn.Module):
+    """Multi-scale CNN-BiLSTM — dishwasher_multiscale_best.pt, window=599, 4ch"""
+    def __init__(self, lstm_hidden=256, lstm_layers=1, dropout=0.3):
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv1d(4,   16,  kernel_size=15, padding=7), nn.BatchNorm1d(16),  nn.ReLU(), nn.Dropout(dropout),
+            nn.Conv1d(16,  128, kernel_size=9,  padding=4), nn.BatchNorm1d(128), nn.ReLU(), nn.Dropout(dropout),
+            nn.Conv1d(128, 128, kernel_size=5,  padding=2), nn.BatchNorm1d(128), nn.ReLU(),
+        )
+        self.lstm = nn.LSTM(input_size=128, hidden_size=lstm_hidden, num_layers=lstm_layers,
+                            batch_first=True, bidirectional=True,
+                            dropout=dropout if lstm_layers>1 else 0)
+        self.classifier = nn.Sequential(
+            nn.Linear(lstm_hidden*2, 256), nn.ReLU(), nn.Dropout(dropout), nn.Linear(256,1)
+        )
+    def forward(self, x):
+        feat = self.cnn(x).permute(0,2,1)
+        out, _ = self.lstm(feat)
+        return self.classifier(out[:, out.size(1)//2, :]).squeeze(1)
+
+
+APPLIANCE_CONFIG = {
+    'kettle': {
+        'model_class': KettleCNN,
+        'model_file':  'kettle_v8_w99.pt',
+        'window':      99,
+        'threshold':   0.85,
+        'mean_watts':  2478.0,
+        'color':       '#ef4444',
+        'icon':        '🫖',
+        'label':       'Kettle',
+        'channels':    1,
+    },
+    'fridge': {
+        'model_class': FridgeCNNBiLSTM,
+        'model_file':  'fridge_v4_best.pt',
+        'window':      99,
+        'threshold':   0.22,
+        'mean_watts':  85.0,
+        'color':       '#3b82f6',
+        'icon':        '🧊',
+        'label':       'Fridge',
+        'channels':    1,
+    },
+    'washing_machine': {
+        'model_class': WashingMachineCNNBiLSTM,
+        'model_file':  'washing_machine_new_best.pt',
+        'window':      599,
+        'threshold':   0.80,
+        'mean_watts':  800.0,
+        'color':       '#8b5cf6',
+        'icon':        '🫧',
+        'label':       'Washing Machine',
+        'channels':    1,
+    },
+    'dishwasher': {
+        'model_class': DishwasherMultiScaleCNNBiLSTM,
+        'model_file':  'dishwasher_multiscale_best.pt',
+        'window':      599,
+        'threshold':   0.80,
+        'mean_watts':  900.0,
+        'color':       '#10b981',
+        'icon':        '🍽️',
+        'label':       'Dishwasher',
+        'channels':    4,
+    },
+}
+
+
+def build_multiscale(X):
+    N, W = X.shape
+    out  = np.zeros((N, 4, W), dtype=np.float32)
+    out[:, 0, :] = X
+    diff = np.diff(X, axis=1, prepend=X[:, :1])
+    dmax = np.abs(diff).max(axis=1, keepdims=True) + 1e-8
+    out[:, 1, :] = diff / dmax
+    for idx, k in enumerate([5, 15], start=2):
+        pad = np.concatenate([np.repeat(X[:, :1], k-1, axis=1), X], axis=1)
+        out[:, idx, :] = np.stack([pad[:, i:i+k].mean(axis=1) for i in range(W)], axis=1)
+    return out
+
+
+def load_model(appliance, models_dir, device):
+    cfg   = APPLIANCE_CONFIG[appliance]
+    path  = f"{models_dir}/{cfg['model_file']}"
+    model = cfg['model_class']()
+    ckpt  = torch.load(path, map_location=device, weights_only=False)
+    state = ckpt.get('model_state_dict') or ckpt.get('model_state') or ckpt
+    model.load_state_dict(state)
+    model.to(device).eval()
+    return model
+
+
+@torch.no_grad()
+def run_inference(aggregate_norm, appliance, model, device, batch_size=64):
+    cfg = APPLIANCE_CONFIG[appliance]
+    W   = cfg['window']
+    N   = len(aggregate_norm)
+    if N < W:
+        return np.array([], dtype=np.float32)
+    n_windows = N - W + 1
+    windows   = np.stack([aggregate_norm[i:i+W] for i in range(n_windows)], axis=0).astype(np.float32)
+    X = build_multiscale(windows) if cfg['channels'] == 4 else windows[:, np.newaxis, :]
+    probs = []
+    for i in range(0, len(X), batch_size):
+        batch  = torch.tensor(X[i:i+batch_size]).to(device)
+        logits = model(batch)
+        probs.extend(torch.sigmoid(logits).cpu().numpy())
+    return np.array(probs, dtype=np.float32)
+
+
+def disaggregate(aggregate_watts, models, device):
+    mn, mx = aggregate_watts.min(), aggregate_watts.max()
+    agg_norm = ((aggregate_watts - mn) / (mx - mn)).astype(np.float32) if mx-mn > 1e-6 else np.zeros_like(aggregate_watts, dtype=np.float32)
+    results = {}
+    for appliance, model in models.items():
+        cfg      = APPLIANCE_CONFIG[appliance]
+        W        = cfg['window']
+        half     = W // 2
+        probs    = run_inference(agg_norm, appliance, model, device)
+        preds    = (probs >= cfg['threshold']).astype(int)
+        est_w    = preds * cfg['mean_watts']
+        time_idx = np.arange(half, half + len(probs))
+        on_minutes = int(preds.sum())
+        kwh        = on_minutes * cfg['mean_watts'] / 1000 / 60
+        results[appliance] = {
+            'probs': probs, 'preds': preds, 'time_idx': time_idx,
+            'est_watts': est_w, 'on_minutes': on_minutes, 'kwh': kwh,
+        }
+    return results
